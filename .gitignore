@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+.vite/
+
+# 调试截图
+image*.png
+
+# AI 工作记忆
+.workbuddy/
+
+# 临时文档（可选提交）
+底层逻辑.md

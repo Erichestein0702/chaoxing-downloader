@@ -1,0 +1,194 @@
+/* 主容器 - 浮动面板 */
+#chaoxing-ppt-downloader-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 2147483647; /* 最大z-index */
+  width: 320px;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+  border: 1px solid #e8e8e8;
+}
+
+/* 头部 - 标题 + 关闭按钮 */
+.ppt-downloader-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px 12px 0 0;
+}
+
+.ppt-downloader-title {
+  color: #fff;
+  font-weight: 600;
+  font-size: 15px;
+  user-select: none;
+}
+
+#ppt-close-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: #fff;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+#ppt-close-btn:hover {
+  background: rgba(255, 255, 255, 0.35);
+  transform: scale(1.1);
+}
+
+/* 内容区 */
+.ppt-downloader-body {
+  padding: 12px 16px 16px;
+}
+
+#scan-ppt-btn,
+#download-all-btn {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  margin: 0;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: 8px;
+}
+
+#scan-ppt-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+}
+
+#scan-ppt-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+#scan-ppt-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#download-all-btn {
+  background: #f0f0f0;
+  color: #333;
+}
+
+#download-all-btn:hover {
+  background: #e0e0e0;
+}
+
+/* PPT列表 */
+#ppt-list-container {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-top: 8px;
+  padding: 4px 0;
+}
+
+#ppt-list-container h4 {
+  margin: 0 0 8px 0;
+  padding: 8px 0;
+  font-size: 13px;
+  color: #666;
+  border-bottom: 1px solid #eee;
+}
+
+.ppt-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 4px 0;
+  background: #f8f9fa;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+  font-size: 13px;
+}
+
+.ppt-item:hover {
+  background: #e9ecef;
+}
+
+.ppt-type {
+  background: #667eea;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+  min-width: 36px;
+  text-align: center;
+}
+
+.ppt-title {
+  flex: 1;
+  color: #495057;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.download-single-btn {
+  background: #28a745;
+  color: #fff;
+  border: none;
+  padding: 5px 12px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.download-single-btn:hover {
+  background: #218838;
+}
+
+/* 滚动条美化 */
+#ppt-list-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+#ppt-list-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#ppt-list-container::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 3px;
+}
+
+#ppt-list-container::-webkit-scrollbar-thumb:hover {
+  background: #aaa;
+}
+
+@media print {
+  #chaoxing-ppt-downloader-container {
+    display: none !important;
+  }
+}

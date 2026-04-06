@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>超星学习通PPT下载器</title>
+  <link rel="stylesheet" href="./popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>📚 PPT下载器</h1>
+      <p class="subtitle">超星学习通课程资源下载工具</p>
+    </header>
+
+    <div class="status-section">
+      <div class="status-card">
+        <div class="status-icon">🔍</div>
+        <div class="status-info">
+          <span class="status-label">当前页面</span>
+          <span id="page-status" class="status-value">检测中...</span>
+        </div>
+      </div>
+      
+      <div class="status-card">
+        <div class="status-icon">📊</div>
+        <div class="status-info">
+          <span class="status-label">发现PPT</span>
+          <span id="ppt-count" class="status-value">0 个</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="action-section">
+      <button id="scan-btn" class="primary-btn">
+        🔎 扫描当前页面
+      </button>
+      <button id="download-all-btn" class="secondary-btn" disabled>
+        ⬇️ 批量下载全部
+      </button>
+    </div>
+
+    <div class="ppt-list-section">
+      <h3>📋 PPT列表</h3>
+      <div id="ppt-list" class="ppt-list">
+        <div class="empty-state">
+          <p>点击"扫描"按钮查找PPT资源</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="progress-section" id="progress-section" style="display: none;">
+      <h3>⏳ 下载进度</h3>
+      <div class="progress-container">
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+        <span id="progress-text" class="progress-text">0%</span>
+      </div>
+      <div id="task-log" class="task-log"></div>
+    </div>
+
+    <footer>
+      <p>v1.0.0 | 基于ChaoXingDownload二次开发</p>
+    </footer>
+  </div>
+
+  <script src="./popup.ts"></script>
+</body>
+</html>
