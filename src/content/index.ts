@@ -155,33 +155,32 @@ function parseToOpenParams(onclickAttr: string): ToOpenParams | null {
 
 /**
  * 构造候选下载 URL 列表（按优先级排序）
+ * 注意：所有 status API 统一使用 mooc1.chaoxing.com 避免跨域问题
  */
 function buildCandidateUrls(meta: Record<string, string>): Array<{ method: string; url: string }> {
   const urls: Array<{ method: string; url: string }> = [];
-  const { objectId, dataId, classId, enc, t } = meta;
+  const { objectId, classId, enc, t } = meta;
   if (!objectId) return urls;
 
-  // 1. 主站 status API（最可靠）
-  let statusUrl = `https://mooc1.chaoxing.com/ananas/status/${objectId}?flag=normal`;
-  if (classId) statusUrl += `&courseid=${classId}`;
-  if (enc) statusUrl += `&enc=${encodeURIComponent(enc)}`;
-  if (t) statusUrl += `&t=${t}`;
+  // 1. 主站 status API（同域请求，不受CORS限制）
+  let statusUrl = 'https://mooc1.chaoxing.com/ananas/status/' + objectId + '?flag=normal';
+  if (classId) statusUrl += '&courseid=' + classId;
+  if (enc) statusUrl += '&enc=' + encodeURIComponent(enc);
+  if (t) statusUrl += '&t=' + t;
   urls.push({ method: 'status_fetch', url: statusUrl });
 
-  // 2. 备用域 status API
-  if (classId && enc && t) {
-    urls.push({
-      method: 'status_fetch',
-      url: `https://mooc2-ans.chaoxing.com/ananas/status/${objectId}?flag=normal&courseid=${classId}&enc=${encodeURIComponent(enc)}&t=${t}`
-    });
-  }
+  // 2. 预览链接 fallback
+  urls.push({
+    method: 'open_window',
+    url: 'https://mooc1.chaoxing.com/ananas/preview/' + objectId + '?courseid=' + (classId || '')
+  });
 
-  // 3. 预览链接 fallback
-  urls.push({ method: 'open_window', url: `https://mooc1.chaoxing.com/ananas/preview/${objectId}?courseid=${classId || ''}` });
-
-  // 4. 直接附件下载
+  // 3. 直接附件下载
   if (enc && t) {
-    urls.push({ method: 'direct_download', url: `https://ans-attachment.chaoxing.com/full/${objectId}?courceid=${classId || ''}&enc=${encodeURIComponent(enc)}&t=${t}` });
+    urls.push({
+      method: 'direct_download',
+      url: 'https://ans-attachment.chaoxing.com/full/' + objectId + '?courceid=' + (classId || '') + '&enc=' + encodeURIComponent(enc) + '&t=' + t
+    });
   }
 
   return urls;
@@ -347,31 +346,69 @@ function extractCourseFolderName(): string {
 }
 
 /**
- * V10 批量下载主流程
- * 1. CS逐个fetch status获取CDN直链
- * 2. 打包发给BG批量处理
+ * 带重试的 status API 请求
+ * @param url status API 地址
+ * @param maxRetries 最大重试次数
+ */
+async function fetchStatusWithRetry(url: string, maxRetries: number = 2): Promise<{ url: string; isPdf: boolean } | null> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      log(`[retry] 第${attempt}次重试: ${url.substring(0, 80)}...`);
+      await new Promise(r => setTimeout(r, 1000 * attempt));
+    }
+
+    const result = await fetchStatusAndGetDownloadUrl(url);
+    if (result) return result;
+  }
+  return null;
+}
+
+/** 更新批量下载进度 UI */
+function updateBatchProgress(current: number, total: string, msg: string): void {
+  const dlBtn = document.getElementById('download-all-btn');
+  if (dlBtn) dlBtn.textContent = '⏳ ' + current + '/' + total + ' ' + msg;
+  showUserMessage('📥 (' + current + '/' + total + ') ' + msg);
+}
+
+/**
+ * V10 批量下载主流程（增强版）
+ * - 实时进度显示
+ * - 失败自动重试（2次）
+ * - 详细错误日志
  */
 async function batchDownloadV10(ppts: PPTResource[]): Promise<void> {
   const folderName = extractCourseFolderName();
-  log(`[V10-BATCH] 文件夹: ${folderName}`);
-  showUserMessage(`📦 开始批量下载 ${ppts.length} 个文件到 "${folderName}/"...`);
+  const total = String(ppts.length);
+  log('[V10-BATCH] 文件夹: ' + folderName);
 
+  updateBatchProgress(0, total, '获取链接中...');
   const files: Array<{ cdnUrl: string; filename: string }> = [];
+  const failedNames: string[] = [];
 
   for (let i = 0; i < ppts.length; i++) {
     const ppt = ppts[i];
     const meta = ppt.meta || {};
     const candidates = buildCandidateUrls(meta);
 
+    updateBatchProgress(i + 1, total, '获取 ' + ppt.title + ' 链接...');
+
+    let gotUrl = false;
     for (const { method, url } of candidates) {
       if (method === 'status_fetch') {
-        const result = await fetchStatusAndGetDownloadUrl(url);
+        const result = await fetchStatusWithRetry(url, 2);
         if (result) {
           const ext = result.isPdf ? 'pdf' : ppt.type;
-          files.push({ cdnUrl: result.url, filename: `${ppt.title}.${ext}` });
+          files.push({ cdnUrl: result.url, filename: ppt.title + '.' + ext });
+          gotUrl = true;
+          log('[V10-BATCH] ✅ ' + ppt.title + ': 直链就绪');
           break;
         }
       }
+    }
+
+    if (!gotUrl) {
+      failedNames.push(ppt.title);
+      log('[V10-BATCH] ❌ ' + ppt.title + ': 无法获取直链接');
     }
 
     if (i < ppts.length - 1) await new Promise(r => setTimeout(r, 200));
@@ -379,10 +416,16 @@ async function batchDownloadV10(ppts: PPTResource[]): Promise<void> {
 
   if (files.length === 0) {
     showUserMessage('❌ 所有文件都无法获取下载链接');
+    isDownloading = false;
     return;
   }
 
-  showUserMessage(`⏳ 正在下载 ${files.length} 个文件...`);
+  if (failedNames.length > 0) {
+    log('[V10-BATCH] ⚠️ 以下文件获取失败: ' + failedNames.join(', '));
+  }
+
+  updateBatchProgress(0, total, '开始下载...');
+  showUserMessage('⏳ 正在下载 ' + files.length + ' 个文件到 "' + folderName + '/"...');
 
   const batchResult = await new Promise<BatchV10Response>((resolve) => {
     chrome.runtime.sendMessage(
@@ -393,13 +436,25 @@ async function batchDownloadV10(ppts: PPTResource[]): Promise<void> {
   });
 
   if (batchResult.success && batchResult.results) {
+    let okCount = 0;
+    let failCount = 0;
+
     batchResult.results.forEach(r => {
       const ppt = ppts.find(p => r.filename.includes(p.title));
-      if (ppt) { ppt.downloaded = r.success; updateSingleItemStatus(ppt, r.success); }
+      if (ppt) {
+        ppt.downloaded = r.success;
+        updateSingleItemStatus(ppt, r.success);
+        if (r.success) okCount++; else failCount++;
+      }
     });
-    showUserMessage(`✅ 完成: ${batchResult.successCount}成功 ${batchResult.failCount}失败`);
+
+    const summary = '✅ 完成: ' + okCount + '成功 ' + failCount + '失败';
+    updateBatchProgress(files.length, total, '完成');
+    showUserMessage(summary);
+    log('[V10-BATCH] ' + summary);
   } else {
-    showUserMessage(`❌ 批量下载失败: ${batchResult.error || '未知错误'}`);
+    showUserMessage('❌ 批量下载失败: ' + (batchResult.error || '未知错误'));
+    logErr('[V10-BATCH] 失败: ', batchResult.error);
   }
 }
 
