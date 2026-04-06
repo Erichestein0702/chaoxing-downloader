@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ChaoXing PPT Downloader",
-  "version": "1.0.0",
-  "description": "Auto detect and download PPT resources from ChaoXing platform",
+  "name": "超星学习通资源下载器",
+  "version": "1.1.0",
+  "description": "自动检测并下载超星学习通平台的课程资源（PPT/PDF/视频/文档等）",
   "permissions": ["activeTab", "downloads", "storage", "scripting"],
   "host_permissions": [
     "https://mooc1.chaoxing.com/*",
@@ -28,7 +28,7 @@
   }],
   "action": {
     "default_popup": "popup/index.html",
-    "default_title": "PPT Downloader",
+    "default_title": "资源下载器",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

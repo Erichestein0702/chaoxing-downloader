@@ -492,12 +492,15 @@ function updateSingleItemStatus(ppt: PPTResource, downloaded: boolean): void {
 
 let detectedPPTs: PPTResource[] = [];
 
+/** 支持的文件类型（资料区 toOpen dataType） */
+const SUPPORTED_TYPES = ['ppt', 'pptx', 'pdf', 'mp4', 'mp3', 'doc', 'docx', 'xls', 'xlsx', 'zip', 'rar'];
+
 /** 扫描资料区 iframe 的 li.dataBody_file */
 function scanDataBodyFiles(iframeDoc: Document, label: string): PPTResource[] {
   const results: PPTResource[] = [];
   const items = iframeDoc.querySelectorAll('li.dataBody_file');
 
-  log(`[${label}] li.dataBody_file: ${items.length}个`);
+  log('[' + label + '] li.dataBody_file: ' + items.length + '个');
 
   items.forEach((li, idx) => {
     const onclickAttr = li.getAttribute('onclick') || '';
@@ -507,15 +510,16 @@ function scanDataBodyFiles(iframeDoc: Document, label: string): PPTResource[] {
     if (!params) return;
 
     const fileType = params.dataType.toLowerCase();
-    if (fileType !== 'ppt' && fileType !== 'pptx') return;
 
-    log(`  [${label}] ${idx + 1}. [${fileType}] ${params.dataName}`);
+    if (SUPPORTED_TYPES.indexOf(fileType) === -1) return;
+
+    log('  [' + label + '] ' + (idx + 1) + '. [' + fileType + '] ' + params.dataName);
 
     results.push({
-      id: `data_${params.objectId}_${idx}`,
-      title: params.dataName.replace(/\.(ppt|pptx)$/i, ''),
-      url: `https://mooc1.chaoxing.com/ananas/status/${params.objectId}?flag=normal`,
-      type: fileType as 'ppt' | 'pptx',
+      id: 'data_' + params.objectId + '_' + idx,
+      title: params.dataName.replace(/\.\w+$/i, ''),
+      url: 'https://mooc1.chaoxing.com/ananas/status/' + params.objectId + '?flag=normal',
+      type: inferFileType(params.dataName),
       courseId: params.classId,
       downloaded: false,
       meta: {
@@ -649,12 +653,12 @@ function createContainerUI(): HTMLDivElement {
   container.id = CONTAINER_ID;
   container.innerHTML = `
     <div class="ppt-downloader-header">
-      <span class="ppt-downloader-title">📥 PPT下载器</span>
+      <span class="ppt-downloader-title">📥 资源下载器</span>
       <button id="ppt-close-btn" title="关闭">✕</button>
     </div>
     <div class="ppt-downloader-body">
-      <button id="scan-ppt-btn" title="扫描当前页面的PPT">扫描PPT</button>
-      <button id="download-all-btn" title="批量下载所有PPT" style="display:none;">批量下载 (0)</button>
+      <button id="scan-ppt-btn" title="扫描当前页面的资源文件">扫描资源</button>
+      <button id="download-all-btn" title="批量下载所有文件" style="display:none;">批量下载 (0)</button>
       <div id="ppt-list-container" style="display:none;"></div>
     </div>
   `;
@@ -726,12 +730,12 @@ function setupButtonHandlers(): void {
         displayPPTList(ppts);
         const dlBtn = document.getElementById('download-all-btn');
         if (dlBtn) { dlBtn.style.display = 'inline-block'; dlBtn.textContent = `批量下载 (${ppts.length})`; }
-        btn.textContent = `已发现 ${ppts.length} 个`;
+        btn.textContent = '已发现 ' + ppts.length + ' 个';
         chrome.runtime.sendMessage({ type: 'PPT_LIST_RESULT', ppts });
       } else {
         warn('未发现资源');
-        btn.textContent = '未发现PPT';
-        setTimeout(() => { btn.textContent = '扫描PPT'; btn.disabled = false; }, 2000);
+        btn.textContent = '未发现资源';
+        setTimeout(() => { btn.textContent = '扫描资源'; btn.disabled = false; }, 2000);
       }
     } catch (e) {
       logErr('扫描异常:', e);
