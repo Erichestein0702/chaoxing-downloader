@@ -442,7 +442,151 @@ src/
 
 ### 当前待办事项
 
-- [ ] 清理 Background 中的死代码（旧版 `handleDownloadPPT`、`DOWNLOAD_PPT_V2/V3`、`DOWNLOAD_BLOB_DATA`、`DOWNLOAD_DIRECT_URL`、`TRIGGER_DOWNLOAD` 等）
-- [ ] 添加下载失败重试机制
-- [ ] 添加下载进度显示
+- [x] 清理 Background 中的死代码（旧版 `handleDownloadPPT`、`DOWNLOAD_PPT_V2/V3`、`DOWNLOAD_BLOB_DATA`、`DOWNLOAD_DIRECT_URL`、`TRIGGER_DOWNLOAD` 等）
+- [x] 添加下载失败重试机制
+- [x] 添加下载进度显示
 - [ ] 考虑加入 PDF 转换功能（已有预留接口）
+
+---
+
+## 2026-04-06 开发记录
+
+### 12. 代码重构：清理 Background 死代码
+
+- **日期**: 2026-04-06
+- **位置**: `src/background/index.ts`
+- **问题**: Background 存在大量历史遗留代码（V2/V3/V8 等废弃方案），影响可维护性
+- **删除内容**:
+  - 8 个废弃 handler: `V2`, `V3`, `DIRECT_URL`, `TRIGGER_DOWNLOAD`, `BLOB_DATA`, `BLOB_URL`, `DOWNLOAD_PPT`, `BATCH_DOWNLOAD`, `GET_STATUS`
+  - 6 个废弃函数: `handleDownloadPPT()`, `handleDownloadV2()`, `handleDownloadV3()`, `handleBatchDownload()`, `ensureOriginalBlob()`, `notifyProgress()`, `showNotification()`
+  - `downloadTasks` Map 和 `DownloadTask` 类型依赖
+- **新增**: `blobToDataUrl()` 公共工具函数，V10Response/BatchV10Response 本地接口
+- **统计**: `background/index.ts` 723行 → 235行 (**-67%**)
+- **构建**: ✅ 通过
+
+---
+
+### 13. Content Script 模块化重构
+
+- **日期**: 2026-04-06
+- **位置**: `src/content/index.ts`
+- **问题**: 1102 行代码逻辑混杂，难以维护
+- **重构后结构**（按功能分区为 8 大模块）:
+  1. 常量与类型定义 (CHAOXING_DOMAINS, SUPPORTED_TYPES, 接口定义)
+  2. 日志系统 (log/warn/logErr)
+  3. 工具函数 (isChaoxingHostname, sanitizeFolderName, showUserMessage)
+  4. 参数解析器 (`parseToOpenParams()`)
+  5. API请求层 (`buildCandidateUrls()`, `fetchStatusAndGetDownloadUrl()`)
+  6. 下载引擎 (`sendToBackgroundV10()`, `navigateToDownload()`, `downloadPPTFromContent()`)
+  7. 批量下载引擎 (`fetchStatusWithRetry()`, `batchDownloadV10()`, `enqueueBatchDownload()`)
+  8. DOM扫描器 (`scanDataBodyFiles()`, `scanDocumentForLinks()`, `fetchPPTFromAPI()`, `detectPPTResources()`)
+  9. UI层 (`createContainerUI()`, `displayPPTList()`, `setupButtonHandlers()`)
+  10. 初始化 (事件监听, MutationObserver)
+- **清理**: 删除废弃的 `extractImagesFromUrl()`, `downloadImages()`
+- **优化**: `displayPPTList()` 改用 DOM 操作替代模板字符串（避免 XSS）
+- **统计**: 1102行 → 740行 (**-33%**)
+- **构建**: ✅ 通过
+
+---
+
+### 14. 批量下载 CORS 问题修复
+
+- **日期**: 2026-04-06
+- **位置**: `src/content/index.ts` - `buildCandidateUrls()`
+- **问题**: `batchDownloadV10()` 中调用 `mooc2-ans.chaoxing.com` status API 跨域失败
+- **根因**: 备用域 status API 与主站不同域，触发 CORS 拦截
+- **修复**: 
+  - 移除 `mooc2-ans.chaoxing.com` 备用 URL
+  - 统一使用 `mooc1.chaoxing.com` 同域请求
+  - 候选 URL 列表从 4 个减为 3 个（主站 status、预览、直接附件）
+- **效果**: 批量下载不再因 CORS 失败
+
+---
+
+### 15. 下载进度实时显示
+
+- **日期**: 2026-04-06
+- **位置**: `src/content/index.ts`
+- **新增**: `updateBatchProgress(current, total, msg)` 函数
+- **UI 更新**: 
+  - 批量下载按钮文字动态更新: `⏳ 3/10 获取 xxx 链接...`
+  - Toast 消息同步显示当前进度
+- **用户体验**: 用户知道下载进行到哪一步，不再焦虑等待
+
+---
+
+### 16. 失败重试机制
+
+- **日期**: 2026-04-06
+- **位置**: `src/content/index.ts`
+- **新增**: `fetchStatusWithRetry(url, maxRetries=2)` 函数
+- **策略**: 
+  - 失败后指数退避重试（1s, 2s）
+  - 最大重试 2 次
+  - 记录失败文件名列表 `failedNames`
+- **日志**: 每次重试输出 `[retry] 第N次重试: ...`
+- **效果**: 网络抖动导致的临时失败可自动恢复
+
+---
+
+### 17. 多类型文件支持（v1.1.0）
+
+- **日期**: 2026-04-06
+- **位置**: `src/content/index.ts`, `src/types/index.ts`
+- **扩展前**: 仅支持 PPT/PPTX
+- **扩展后**: 支持 11 种文件类型
+  - 文档: ppt, pptx, pdf, doc, docx
+  - 媒体: mp4, mp3
+  - 表格: xls, xlsx
+  - 压缩: zip, rar
+- **实现**:
+  - 新增 `SUPPORTED_TYPES` 常量数组
+  - `scanDataBodyFiles()` 改用 `SUPPORTED_TYPES.indexOf()` 判断
+  - UI 标题从 "PPT下载器" 改为 "资源下载器"
+  - 统一使用 `inferFileType()` 进行类型推断
+
+---
+
+### 18. 设置面板（Popup 双标签页）
+
+- **日期**: 2026-04-06
+- **位置**: `src/popup/index.html`, `src/popup/popup.ts`
+- **新增 UI**: 
+  - 主页/设置双标签页结构
+  - 标签导航: `<nav class="tab-nav">` 切换
+  - 设置项:
+    - 自动扫描开关（页面加载时自动检测）
+    - 默认下载方式（弹出保存对话框 / 静默下载）
+    - 文件类型过滤（6种类型复选框）
+- **持久化**: `chrome.storage.local` 存储设置
+- **实时同步**: 设置变更通过 `chrome.tabs.sendMessage` 同步到 Content Script
+- **权限**: manifest.json 已包含 `"storage"` 权限
+
+---
+
+### 19. v1.1.0 版本发布
+
+- **日期**: 2026-04-06
+- **manifest.json 更新**:
+  - `name`: "ChaoXing PPT Downloader" → "超星学习通资源下载器"
+  - `version`: "1.0.0" → "1.1.0"
+  - `description`: 更新为支持多种资源类型
+  - `action.default_title`: "PPT Downloader" → "资源下载器"
+- **Git 提交**: 4 个 commit
+  - `e0ac222` refactor: 清理Background死代码
+  - `a5abc73` refactor: Content Script模块化重构
+  - `304502f` feat: 批量下载增强（CORS修复+进度显示+重试机制）
+  - `6193da1` feat: v1.1.0 功能扩展（多类型支持+设置面板+UI升级）
+- **构建状态**: ✅ 全部通过
+  - background/index.js: 2.99 KB (gzip: 1.51 KB)
+  - popup/popup.js: 6.27 KB (gzip: 2.66 KB)
+  - content/index.js: 11.73 KB (gzip: 5.21 KB)
+
+---
+
+## 关键经验教训（新增）
+
+6. **代码重构要配合 Git 基线**: 大重构前务必打 tag，随时可回档
+7. **模块化不是越多越好**: 按功能分区（扫描/下载/UI）比按文件类型分区更直观
+8. **用户反馈驱动优先级**: 批量下载的 CORS 问题用户没提，但进度显示是痛点
+9. **设置面板需要 storage 权限**: 提前规划权限，避免后期返工
