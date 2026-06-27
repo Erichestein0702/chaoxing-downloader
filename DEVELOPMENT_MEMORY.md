@@ -445,7 +445,15 @@ src/
 - [x] 清理 Background 中的死代码（旧版 `handleDownloadPPT`、`DOWNLOAD_PPT_V2/V3`、`DOWNLOAD_BLOB_DATA`、`DOWNLOAD_DIRECT_URL`、`TRIGGER_DOWNLOAD` 等）
 - [x] 添加下载失败重试机制
 - [x] 添加下载进度显示
+- [x] 修复 v1.1.0 popup 下载按钮消息格式错位
+- [x] 修复跨域 CORS(status API 从 content 移 background)
+- [x] 修复 background fetch 403(同源代理 tab 方案)
+- [x] 浮动面板内嵌日志面板(用户友好)
+- [x] 主页面 404 检测
+- [x] status API 404 优雅降级
 - [ ] 考虑加入 PDF 转换功能（已有预留接口）
+- [ ] 考虑用 chrome.cookies API 替代 mooc1 tab(更干净,但 cookies API 在 MV3 SW 中行为有差异)
+- [ ] CDN fetch(background)目前用 `credentials: 'omit'`,如果 cldisk.com 也做 Origin 检查,需要类似 mooc1 tab 方案
 
 ---
 
@@ -590,3 +598,204 @@ src/
 7. **模块化不是越多越好**: 按功能分区（扫描/下载/UI）比按文件类型分区更直观
 8. **用户反馈驱动优先级**: 批量下载的 CORS 问题用户没提，但进度显示是痛点
 9. **设置面板需要 storage 权限**: 提前规划权限，避免后期返工
+10. **Origin 头是 Chrome 内部强制加的**: 任何 background fetch 都带 `chrome-extension://<id>`,对 Origin 检查严格的服务器一律 403
+11. **用户口语描述 ≠ 真实症状**: "脚本索引更新"实际是 CORS 跨域,需要 console 实测才能定位
+12. **DevTools 之外的日志能力**: 浮动面板内嵌日志面板 + 一键复制/下载,比让用户开 Console 友好得多
+
+---
+
+## 2026-06-27 开发记录 (v1.1.x 修复)
+
+### 20. Popup 下载按钮无反应 — 消息契约错位
+
+- **日期**: 2026-06-27
+- **位置**: `src/popup/popup.ts:182-202`, `src/content/index.ts:799-823`
+- **症状**: 工具栏 popup 的"下载"和"批量下载"按钮点击无反应
+- **根因**:
+  - popup 单个下载发 `DOWNLOAD_SINGLE` → background 无此 case → 进 default → 返回"未知消息类型" → popup 不知情
+  - popup 批量下载发 `BATCH_DOWNLOAD_V10` + `ppts` 字段 → background 期望 `files`+`folderName` → `files=undefined` → 0 个文件处理
+- **修复**: 改为 popup 通过 `chrome.tabs.sendMessage` 把下载请求转发给 content script(content 已有完整下载逻辑)
+  - `TRIGGER_DOWNLOAD` → content 调 `downloadPPTFromContent()`
+  - `TRIGGER_BATCH_DOWNLOAD` → content 调 `enqueueBatchDownload()`
+- **架构原则**: popup 只做 UI 入口,所有下载逻辑收敛到 content(单一职责)
+
+---
+
+### 21. 跨域 CORS 拦截 — 课程页迁到 mooc2-ans 后 status API 跨域
+
+- **日期**: 2026-06-27
+- **位置**: `src/background/index.ts:resolveCdnUrl()`, `src/content/index.ts:fetchStatusAndGetDownloadUrl()`
+- **症状**: 
+  - 用户报告"学习通更新了脚本索引,原方法失效"
+  - 实际控制台报错:
+    ```
+    Access to fetch at 'https://mooc1.chaoxing.com/ananas/status/...'
+    from origin 'https://mooc2-ans.chaoxing.com'
+    has been blocked by CORS policy
+    net::ERR_FAILED 200 (OK)
+    ```
+  - 关键: HTTP 200 表示**服务器实际返回成功**,只是响应被浏览器拦截
+- **根因**:
+  - 学习通把课程资料页从 `mooc1.chaoxing.com` 迁到 `mooc2-ans.chaoxing.com`
+  - status API 仍在 `mooc1.chaoxing.com`
+  - content script 的 `fetch` 受 CORS 限制
+- **修复**: 把 status API 调用从 content 移到 background service worker
+  - background 有 `host_permissions` 特权,**不受 CORS 限制**
+  - 新增 `RESOLVE_CDN_URL` 消息处理 + `resolveCdnUrl()` 函数
+  - content 改为 `chrome.runtime.sendMessage` 调 background
+
+---
+
+### 22. 主页面 404 检测 — 避免在错误页面触发下载
+
+- **日期**: 2026-06-27
+- **位置**: `src/content/index.ts:isPageBroken()`, `createBrokenPageUI()`, `injectDownloadButton()`
+- **症状**: 用户点下载时,主页面显示 nginx 404 错误页
+- **根因**: 
+  - 主页面 URL 是 `https://mooc1.chaoxing.com/ananas/preview/{objectId}?courseid=...`
+  - preview URL 直接访问时被学习通返回 404
+  - 浮动面板虽然注入到 404 页面,但页面状态错乱
+- **修复**: 
+  - `isPageBroken()` 检测 `document.title === '404'` 或 body 包含 "页面不存在"
+  - 404 时显示提示面板("请到课程资料页使用"),不显示下载按钮
+  - 404 提示面板也带"📋 日志"按钮(方便调试)
+
+---
+
+### 23. status API 404 优雅降级 — 不再跳到 404 新窗口
+
+- **日期**: 2026-06-27
+- **位置**: `src/content/index.ts:ResourceNotFoundError`, `downloadPPTFromContent()`, `batchDownloadV10()`
+- **症状**: 资源已被老师/学习通删除时,fallback 跳到无效 URL,新窗口显示 404 页面
+- **根因**: `downloadPPTFromContent` 失败后 fallback 到 `navigateToDownload()` / `window.open()`,但这些 URL 也已失效
+- **修复**: 
+  - 新增 `ResourceNotFoundError` 异常类
+  - `fetchStatusAndGetDownloadUrl()` 在 404 时 reject 该异常
+  - content 捕获后 toast 提示"`文件名`: 资源不存在,已跳过",**不再打开任何新窗口**
+  - 批量下载时同样处理,跳过 404 文件继续后续文件
+
+---
+
+### 24. 内嵌日志面板 — 不开 DevTools 也能看日志
+
+- **日期**: 2026-06-27
+- **位置**: `src/content/index.ts:toggleLogPanel()`, `src/background/index.ts:BG_LOG_BUFFER`
+- **背景**: 用户中文界面,不熟悉 DevTools,改用浮动面板内嵌日志
+- **实现**:
+  - content 和 background 各自维护内存日志 buffer(最近 300 条)
+  - 浮动面板加"📋"按钮,点开是暗色日志面板
+  - 顶部 4 个按钮: **📋 复制** / **⬇️ 下载 .log** / **清空** / **✕**
+  - background 暴露 `GET_LOGS` / `CLEAR_LOGS` 消息
+  - content 浮动面板查询时合并 CS + BG 日志显示
+- **效果**: 用户出问题直接点"📋 复制"发给我,定位速度大幅提升
+
+---
+
+### 25. background fetch 15s 超时 + 详细错误分支
+
+- **日期**: 2026-06-27
+- **位置**: `src/background/index.ts:resolveCdnUrl()`
+- **症状**: 日志只有 `[Resolve] URL` 开头,没有 ✅/❌,说明 fetch 卡住
+- **根因**: 原始 `fetch` 无超时保护,可能因网络/服务器问题永远不返回
+- **修复**:
+  - `Promise.race` 加 15s 超时
+  - 每个错误分支独立 log(HTTP 非 200 / 返回空 / 非 JSON / timeout)
+  - 后续日志能精确定位卡在哪一步
+
+---
+
+### 26. ★★★ background fetch 强制带 `Origin: chrome-extension://<id>` 头导致 403
+
+- **日期**: 2026-06-27
+- **位置**: `src/background/index.ts:fetchViaMooc1Tab()`, `waitTabLoad()`, `src/content/index.ts:FETCH_STATUS_API`
+- **症状**: 加了 cookie(3 个)+ 显式 Referer + `credentials: 'omit'` 仍然 403
+- **根因**(**本次最大发现**):
+  - Chrome MV3 background service worker 的 `fetch` 强制带 `Origin: chrome-extension://<id>` 头
+  - 这个头**无法用 JS 覆盖**(由 fetch spec 决定)
+  - 学习通服务器对非页面 Origin(`chrome-extension://`)一律 403
+  - 之前在 console 跑 fetch 是 200,因为 console 的 Origin = 页面 URL(`https://mooc2-ans.chaoxing.com`)
+- **修复方案 — "同源代理 tab" 架构**:
+  ```
+  background 收到 RESOLVE_CDN_URL
+    ↓
+  1. chrome.tabs.query({url: 'https://mooc1.chaoxing.com/*'})  // 找已有 tab
+    ↓
+  2. 没有就 chrome.tabs.create({url: 'https://mooc1.chaoxing.com/', active: false})
+    ↓
+  3. waitTabLoad(tabId, 8000)  // 轮询 status === 'complete'
+    ↓
+  4. chrome.tabs.sendMessage(tabId, {type: 'FETCH_STATUS_API', url})  // 让那个 tab 的 content 帮 fetch
+    ↓
+  5. content 在 mooc1 域名下 fetch(同源,Origin = https://mooc1.chaoxing.com)→ 200 OK
+  ```
+- **新增**:
+  - `fetchViaMooc1Tab(url, timeoutMs)` — 找/建 tab + sendMessage
+  - `waitTabLoad(tabId, timeoutMs)` — 轮询 tab.status
+  - content 端 `FETCH_STATUS_API` 消息 + `fetchStatusApiInPage()`(同源 fetch)
+- **代价**: 用户 tab 栏多 1 个后台 mooc1 tab(`active: false`,不会抢焦点,后续复用)
+- **manifest 权限**: `cookies` 权限保留(虽然当前未直接用,但 fetchViaMooc1Tab 失败时可作为 fallback)
+
+---
+
+### 27. 当前最终架构 (v1.1.x 修复后)
+
+```
+用户点下载
+  ↓
+content (mooc2-ans 页面上下文,有页面 Cookie)
+  ├── 扫描 li.dataBody_file → 解析出 meta(objectId/classId/enc/t)
+  ├── chrome.runtime.sendMessage(RESOLVE_CDN_URL, {meta, referer})
+  │
+  ↓
+background
+  ├── fetchViaMooc1Tab() ──→ chrome.tabs.sendMessage(mooc1 tab, FETCH_STATUS_API)
+  │                              ↓
+  │                         [mooc1 tab 的 content]
+  │                              ├── fetch(status URL)  // 同源!Origin 正常
+  │                              └── 解析出 cdnUrl
+  ├── 收到 {success, cdnUrl, isPdf} → sendResponse 给主 content
+  │
+  ↓
+content 收到 cdnUrl
+  ├── chrome.runtime.sendMessage(FETCH_AND_DOWNLOAD_V10, {cdnUrl, filename})
+  │
+  ↓
+background
+  ├── fetch(cdnUrl) → Blob (cldisk.com CDN,允许 CORS)
+  ├── Blob → base64 → dataUrl
+  └── chrome.downloads.download({url: dataUrl, filename, saveAs: true})
+  │
+  ↓
+✅ 弹出保存对话框
+```
+
+**关键经验**:
+- **CORS 拦截 ≠ 服务器拒绝**:`net::ERR_FAILED 200 (OK)` 看着矛盾,实际是请求成功了但响应被浏览器拦截
+- **`Origin` 头是终极壁垒**: 这是本次最难发现的一层,JS 改不了,只能换 fetch 上下文
+- **同源代理 tab 是终极方案**: 当其他路都走不通时,在目标域名下跑 fetch 是最稳的办法
+- **代价要明确**: tab 栏会多一个后台 tab,这是绕不开的 trade-off
+
+---
+
+### 28. v1.1.x 版本对比
+
+| 维度 | v1.1.0 (原版) | v1.1.x (修复后) |
+|------|-------------|---------------|
+| popup 下载按钮 | ❌ 静默失败 | ✅ 转发给 content |
+| 跨域 status API | ❌ CORS 拦截 | ✅ mooc1 tab 同源 fetch |
+| 主页面 404 | ❌ 浮动面板错乱 | ✅ 提示页面 |
+| 资源被删(404) | ❌ 跳 404 新窗口 | ✅ toast 提示跳过 |
+| 日志查看 | ❌ 必须开 DevTools | ✅ 浮动面板📋按钮 |
+| fetch 卡死 | ❌ 30s 后 SW 被 kill | ✅ 15s 超时 + 详细日志 |
+| background fetch Origin | ❌ chrome-extension Origin → 403 | ✅ 同源 tab 代理 |
+
+---
+
+## 关键经验教训（v1.1.x 新增）
+
+13. **fetch 失败要看完整错误**: `net::ERR_FAILED 200 (OK)` 不是矛盾,是 CORS 拦截响应的典型表现
+14. **`Origin` 头是 Chrome 内部强制加的**: background service worker 的 fetch 永远带 `chrome-extension://<id>`,这是 v1.1.x 最难绕过的限制
+15. **同源代理 tab 是终极 CORS 解决方案**: 当所有 fetch 配置都试过还失败时,创建一个目标域名的 tab 让 content 在那里 fetch 是最后的手段
+16. **浮动面板内嵌日志比引导用户开 DevTools 友好**: 用户是中文界面,内嵌日志 + 一键复制大幅降低沟通成本
+17. **检测 404 主页面**: 用户在错误页面触发操作时,扩展应该显示提示而不是强行执行
+18. **fallback 路径会放大问题**: 资源被删时,fallback 跳到无效 URL 会让用户看到 404 页面,体验比直接失败更差
