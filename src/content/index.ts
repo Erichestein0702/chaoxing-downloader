@@ -60,13 +60,27 @@ interface BatchV10Response {
 const LOG_PREFIX = '%c[CS]';
 const LOG_STYLE = 'color: #667eea; font-weight: bold;';
 
+const LOG_BUFFER: string[] = [];
+const LOG_MAX = 300;
+
+function pushLog(level: string, args: unknown[]): void {
+  const ts = new Date().toLocaleTimeString();
+  const text = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+  const line = `${ts} [${level}] ${text}`;
+  LOG_BUFFER.push(line);
+  if (LOG_BUFFER.length > LOG_MAX) LOG_BUFFER.splice(0, LOG_BUFFER.length - LOG_MAX);
+}
+
 function log(...args: unknown[]) {
+  pushLog('CS', args);
   console.log(LOG_PREFIX, LOG_STYLE, new Date().toLocaleTimeString(), ...args);
 }
 function warn(...args: unknown[]) {
+  pushLog('CS', ['⚠️', ...args]);
   console.warn(LOG_PREFIX, LOG_STYLE, '⚠️', ...args);
 }
 function logErr(...args: unknown[]) {
+  pushLog('CS', ['❌', ...args]);
   console.error(LOG_PREFIX, LOG_STYLE, '❌', ...args);
 }
 
@@ -78,6 +92,16 @@ function isChaoxingHostname(): boolean {
   return CHAOXING_DOMAINS.some(d => window.location.hostname.includes(d));
 }
 
+/** 检测主页面是否是 404 / 加载异常 */
+function isPageBroken(): boolean {
+  const t = document.title || '';
+  if (t === '404' || /页面不存在|404 Not Found/i.test(t)) return true;
+  const body = document.body?.innerText || '';
+  if (body.length < 50) return true;
+  if (/页面不存在|该页不存在|404|server error/i.test(body.slice(0, 500))) return true;
+  return false;
+}
+
 /** 清理文件名非法字符 */
 function sanitizeFolderName(name: string): string {
   return name
@@ -86,6 +110,17 @@ function sanitizeFolderName(name: string): string {
     .replace(/^\.+|\.+$/g, '')
     .replace(/\.{2,}/g, '.')
     .trim() || 'ChaoXing_Download';
+}
+
+/** 清理文件名非法字符和路径遍历序列 */
+function sanitizeFilename(name: string): string {
+  return name
+    .replace(/\.{2,}/g, '')
+    .replace(/[\\/]/g, '')
+    .replace(/[:*?"<>|]/g, '')
+    .replace(/^\s+|\s+$/g, '')
+    .replace(/\.{2,}/g, '.')
+    .trim() || 'untitled';
 }
 
 /** 显示用户提示（5秒自动消失） */
@@ -138,8 +173,11 @@ function parseToOpenParams(onclickAttr: string): ToOpenParams | null {
 
   const p = params.map(s => s.replace(/^'|'$/g, ''));
 
+  let dataName = p[0];
+  try { dataName = decodeURIComponent(p[0]); } catch { /* 保持原值 */ }
+
   return {
-    dataName: decodeURIComponent(p[0]),
+    dataName,
     dataType: p[1],
     dataId: p[2],
     objectId: p[4],
@@ -186,35 +224,46 @@ function buildCandidateUrls(meta: Record<string, string>): Array<{ method: strin
   return urls;
 }
 
+/** 资源不存在(404)错误标识 */
+class ResourceNotFoundError extends Error {
+  constructor(msg: string) { super(msg); this.name = 'ResourceNotFoundError'; }
+}
+
 /**
- * 请求 status API 并提取 CDN 直链
+ * 通过 background 解析 status API（避开 content 的 CORS 限制）
  * 优先级: pdf(s3.cldisk.com) > download(d0.cldisk.com) > preview
+ * @throws ResourceNotFoundError 资源被删除时抛出（让上层停止 fallback,避免打开 404 新窗口）
  */
-async function fetchStatusAndGetDownloadUrl(statusUrl: string): Promise<{ url: string; isPdf: boolean } | null> {
-  try {
-    const response = await fetch(statusUrl, {
-      method: 'GET',
-      credentials: 'include',
-      headers: { 'Accept': 'application/json, text/plain, */*' }
-    });
+async function fetchStatusAndGetDownloadUrl(meta: Record<string, string>): Promise<{ url: string; isPdf: boolean } | null> {
+  const { objectId, classId, enc, t } = meta;
+  if (!objectId) return null;
 
-    if (!response.ok) return null;
-
-    const text = await response.text();
-    if (!text || text.length < 5) return null;
-
-    const data = JSON.parse(text) as StatusApiResponse;
-
-    // 优先使用 pdf 字段（最可靠，实测验证）
-    if (data.pdf) return { url: data.pdf, isPdf: true };
-    if (data.download) return { url: data.download, isPdf: false };
-    if (data.preview) return { url: data.preview, isPdf: false };
-
-    return null;
-  } catch (e) {
-    log(`[statusFetch] 错误: ${(e as Error).message}`);
-    return null;
-  }
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      { type: 'RESOLVE_CDN_URL', objectId, classId, enc, t, referer: window.location.href },
+      (response: { success: boolean; cdnUrl?: string; isPdf?: boolean; error?: string }) => {
+        if (chrome.runtime.lastError) {
+          log(`[statusFetch] message error: ${chrome.runtime.lastError.message}`);
+          resolve(null);
+          return;
+        }
+        if (!response?.success) {
+          const errMsg = response?.error || '未知';
+          log(`[statusFetch] 失败: ${errMsg}`);
+          if (/HTTP\s*404/i.test(errMsg)) reject(new ResourceNotFoundError(errMsg));
+          else resolve(null);
+          return;
+        }
+        if (!response.cdnUrl) {
+          log(`[statusFetch] 返回无 cdnUrl`);
+          resolve(null);
+          return;
+        }
+        resolve({ url: response.cdnUrl, isPdf: !!response.isPdf });
+      }
+    );
+    setTimeout(() => resolve(null), 15000);
+  });
 }
 
 // ============================================================
@@ -263,8 +312,8 @@ function invokeOriginalToOpen(ppt: PPTResource): void {
   const win = window as unknown as Record<string, unknown>;
   if (typeof win.toOpen === 'function') {
     (win.toOpen as Function)(
-      meta.dataName || ppt.title,
-      meta.dataType || ppt.type,
+      sanitizeFilename(meta.dataName || ppt.title),
+      sanitizeFilename(meta.dataType || ppt.type),
       meta.dataId || '',
       '', meta.objectId || '', '', '', meta.classId || '', meta.enc || '', '', meta.t || ''
     );
@@ -288,7 +337,7 @@ async function downloadPPTFromContent(ppt: PPTResource): Promise<void> {
 
     try {
       if (method === 'status_fetch') {
-        const result = await fetchStatusAndGetDownloadUrl(url);
+        const result = await fetchStatusAndGetDownloadUrl(meta);
         if (result) {
           const ext = result.isPdf ? 'pdf' : ppt.type;
           const filename = `${ppt.title}.${ext}`;
@@ -317,6 +366,12 @@ async function downloadPPTFromContent(ppt: PPTResource): Promise<void> {
         return;
       }
     } catch (e) {
+      if (e instanceof ResourceNotFoundError) {
+        log(`[V10] 资源不存在(404), 停止 fallback`);
+        showUserMessage(`${ppt.title}: 资源不存在,已跳过`);
+        ppt.downloaded = false;
+        return;
+      }
       log(`[V10] 方案${i + 1} 异常: ${(e as Error).message}`);
     }
   }
@@ -347,17 +402,17 @@ function extractCourseFolderName(): string {
 
 /**
  * 带重试的 status API 请求
- * @param url status API 地址
+ * @param meta 资源 meta(包含 objectId/classId/enc/t)
  * @param maxRetries 最大重试次数
  */
-async function fetchStatusWithRetry(url: string, maxRetries: number = 2): Promise<{ url: string; isPdf: boolean } | null> {
+async function fetchStatusWithRetry(meta: Record<string, string>, maxRetries: number = 2): Promise<{ url: string; isPdf: boolean } | null> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
-      log(`[retry] 第${attempt}次重试: ${url.substring(0, 80)}...`);
+      log(`[retry] 第${attempt}次重试: ${meta.objectId}`);
       await new Promise(r => setTimeout(r, 1000 * attempt));
     }
 
-    const result = await fetchStatusAndGetDownloadUrl(url);
+    const result = await fetchStatusAndGetDownloadUrl(meta);
     if (result) return result;
   }
   return null;
@@ -393,17 +448,26 @@ async function batchDownloadV10(ppts: PPTResource[]): Promise<void> {
     updateBatchProgress(i + 1, total, '获取 ' + ppt.title + ' 链接...');
 
     let gotUrl = false;
-    for (const { method, url } of candidates) {
-      if (method === 'status_fetch') {
-        const result = await fetchStatusWithRetry(url, 2);
-        if (result) {
-          const ext = result.isPdf ? 'pdf' : ppt.type;
-          files.push({ cdnUrl: result.url, filename: ppt.title + '.' + ext });
-          gotUrl = true;
-          log('[V10-BATCH] ✅ ' + ppt.title + ': 直链就绪');
-          break;
+    try {
+      for (const { method, url } of candidates) {
+        if (method === 'status_fetch') {
+          const result = await fetchStatusWithRetry(meta, 2);
+          if (result) {
+            const ext = result.isPdf ? 'pdf' : ppt.type;
+            files.push({ cdnUrl: result.url, filename: ppt.title + '.' + ext });
+            gotUrl = true;
+            log('[V10-BATCH] ✅ ' + ppt.title + ': 直链就绪');
+            break;
+          }
         }
       }
+    } catch (e) {
+      if (e instanceof ResourceNotFoundError) {
+        log('[V10-BATCH] ⏭️ ' + ppt.title + ': 资源不存在(404), 跳过');
+        showUserMessage(`⏭️ ${ppt.title}: 资源不存在,已跳过`);
+        continue;
+      }
+      throw e;
     }
 
     if (!gotUrl) {
@@ -439,9 +503,9 @@ async function batchDownloadV10(ppts: PPTResource[]): Promise<void> {
     let okCount = 0;
     let failCount = 0;
 
-    batchResult.results.forEach(r => {
-      const ppt = ppts.find(p => r.filename.includes(p.title));
-      if (ppt) {
+    batchResult.results.forEach((r, idx) => {
+      if (idx < ppts.length) {
+        const ppt = ppts[idx];
         ppt.downloaded = r.success;
         updateSingleItemStatus(ppt, r.success);
         if (r.success) okCount++; else failCount++;
@@ -654,12 +718,35 @@ function createContainerUI(): HTMLDivElement {
   container.innerHTML = `
     <div class="ppt-downloader-header">
       <span class="ppt-downloader-title">📥 资源下载器</span>
-      <button id="ppt-close-btn" title="关闭">✕</button>
+      <div>
+        <button id="ppt-log-btn" title="查看运行日志" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;margin-right:6px;">📋</button>
+        <button id="ppt-close-btn" title="关闭" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;">✕</button>
+      </div>
     </div>
     <div class="ppt-downloader-body">
       <button id="scan-ppt-btn" title="扫描当前页面的资源文件">扫描资源</button>
       <button id="download-all-btn" title="批量下载所有文件" style="display:none;">批量下载 (0)</button>
       <div id="ppt-list-container" style="display:none;"></div>
+    </div>
+  `;
+  return container;
+}
+
+function createBrokenPageUI(): HTMLDivElement {
+  const container = document.createElement('div');
+  container.id = CONTAINER_ID;
+  container.innerHTML = `
+    <div class="ppt-downloader-header">
+      <span class="ppt-downloader-title">📥 资源下载器</span>
+      <div>
+        <button id="ppt-log-btn" title="查看运行日志" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;margin-right:6px;">📋</button>
+        <button id="ppt-close-btn" title="关闭" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;">✕</button>
+      </div>
+    </div>
+    <div class="ppt-downloader-body" style="padding:12px;font-size:13px;line-height:1.5;color:#dc3545;">
+      ⚠️ 当前页面加载异常(404/服务器错误)<br>
+      请到 <b>课程资料页</b> 使用本扩展。<br>
+      <span style="color:#666;font-size:12px;">当前: <code>${(window.location.pathname + window.location.search).slice(0, 60)}</code></span>
     </div>
   `;
   return container;
@@ -754,11 +841,104 @@ function injectDownloadButton(): void {
   if (!isChaoxingHostname()) return;
   if (injected && document.getElementById(CONTAINER_ID)) return;
 
-  log('注入UI');
   destroyExistingUI();
-  document.body.appendChild(createContainerUI());
+  if (isPageBroken()) {
+    log('注入UI [主页面404, 显示提示]');
+    document.body.appendChild(createBrokenPageUI());
+  } else {
+    log('注入UI');
+    document.body.appendChild(createContainerUI());
+    setupButtonHandlers();
+  }
+  document.getElementById('ppt-close-btn')?.addEventListener('click', destroyExistingUI);
+  document.getElementById('ppt-log-btn')?.addEventListener('click', toggleLogPanel);
   injected = true;
-  setupButtonHandlers();
+}
+
+// ============================================================
+//  日志面板
+// ============================================================
+
+let logPanelOpen = false;
+
+async function toggleLogPanel(): Promise<void> {
+  const existing = document.getElementById('ppt-log-panel');
+  if (existing) { existing.remove(); logPanelOpen = false; return; }
+  logPanelOpen = true;
+
+  const bgLogs: string[] = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'GET_LOGS' }, (r: { logs?: string[] }) => {
+      resolve(r?.logs || []);
+    });
+    setTimeout(() => resolve([]), 2000);
+  });
+
+  const all = [...bgLogs, ...LOG_BUFFER];
+  const panel = document.createElement('div');
+  panel.id = 'ppt-log-panel';
+  panel.style.cssText = `
+    position: fixed; top: 80px; right: 20px; z-index: 999999;
+    width: 560px; max-width: 90vw; height: 480px; max-height: 70vh;
+    background: #1e1e1e; color: #d4d4d4; border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+    display: flex; flex-direction: column; font-family: 'Consolas','Monaco',monospace;
+  `;
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#2d2d2d;border-radius:8px 8px 0 0;">
+      <span style="font-size:13px;font-weight:600;color:#fff;">📋 运行日志 (${all.length}条)</span>
+      <div>
+        <button id="log-copy" style="background:#0e639c;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;margin-right:4px;">📋 复制</button>
+        <button id="log-download" style="background:#0e639c;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;margin-right:4px;">⬇️ 下载</button>
+        <button id="log-clear" style="background:#5a5a5a;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;margin-right:4px;">清空</button>
+        <button id="log-close" style="background:#5a5a5a;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px;">✕</button>
+      </div>
+    </div>
+    <pre id="log-content" style="flex:1;overflow:auto;margin:0;padding:10px;font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-all;">${escapeHtml(all.join('\n'))}</pre>
+  `;
+  document.body.appendChild(panel);
+
+  const pre = panel.querySelector('#log-content')!;
+  pre.scrollTop = pre.scrollHeight;
+
+  document.getElementById('log-close')!.addEventListener('click', () => { panel.remove(); logPanelOpen = false; });
+  document.getElementById('log-clear')!.addEventListener('click', () => {
+    LOG_BUFFER.length = 0;
+    chrome.runtime.sendMessage({ type: 'CLEAR_LOGS' });
+    pre.textContent = '(已清空)';
+  });
+  document.getElementById('log-copy')!.addEventListener('click', async () => {
+    const text = all.join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      flashBtn('log-copy', '✅ 已复制');
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); flashBtn('log-copy', '✅ 已复制'); } catch { flashBtn('log-copy', '❌ 失败'); }
+      ta.remove();
+    }
+  });
+  document.getElementById('log-download')!.addEventListener('click', () => {
+    const blob = new Blob([all.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `chaoxing-log-${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+}
+
+function flashBtn(id: string, label: string): void {
+  const b = document.getElementById(id);
+  if (!b) return;
+  const orig = b.textContent;
+  b.textContent = label;
+  setTimeout(() => { b.textContent = orig; }, 1200);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
 // ============================================================
@@ -780,6 +960,8 @@ if (window === window.top && isChaoxingHostname()) {
     }
   });
   observer.observe(document.body, { childList: true });
+
+  window.addEventListener('unload', () => observer?.disconnect());
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -787,4 +969,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     detectPPTResources().then(ppts => sendResponse({ ppts }));
     return true;
   }
+  if (message.type === 'TRIGGER_DOWNLOAD') {
+    downloadPPTFromContent(message.ppt)
+      .then(() => sendResponse({ success: true }))
+      .catch(e => sendResponse({ success: false, error: (e as Error).message }));
+    return true;
+  }
+  if (message.type === 'TRIGGER_BATCH_DOWNLOAD') {
+    enqueueBatchDownload(message.ppts)
+      .then(() => sendResponse({ success: true }))
+      .catch(e => sendResponse({ success: false, error: (e as Error).message }));
+    return true;
+  }
+  if (message.type === 'FETCH_STATUS_API') {
+    fetchStatusApiInPage(message.url)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(e => sendResponse({ success: false, error: (e as Error).message }));
+    return true;
+  }
 });
+
+/** 在 mooc1 域名下用同源 fetch(无 Origin 限制) */
+async function fetchStatusApiInPage(url: string): Promise<Record<string, unknown>> {
+  const r = await fetch(url, { credentials: 'include', headers: { 'Accept': 'application/json' } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return await r.json();
+}

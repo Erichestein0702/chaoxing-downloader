@@ -180,7 +180,10 @@ function updatePPTList(ppts: PPTResource[]): void {
 }
 
 function handleSingleDownload(ppt: PPTResource): void {
-  chrome.runtime.sendMessage({ type: 'DOWNLOAD_SINGLE', ppt });
+  chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+    const tabId = tabs[0]?.id;
+    if (tabId) chrome.tabs.sendMessage(tabId, { type: 'TRIGGER_DOWNLOAD', ppt });
+  });
   addLogEntry('开始下载: ' + ppt.title, 'info');
 }
 
@@ -190,7 +193,10 @@ function handleBatchDownload(): void {
   const pending = detectedPPTs.filter(p => !p.downloaded);
   if (pending.length === 0) { showNotification('所有资源已下载完毕！', 'success'); return; }
 
-  chrome.runtime.sendMessage({ type: 'BATCH_DOWNLOAD_V10', ppts: pending });
+  chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+    const tabId = tabs[0]?.id;
+    if (tabId) chrome.tabs.sendMessage(tabId, { type: 'TRIGGER_BATCH_DOWNLOAD', ppts: pending });
+  });
   document.getElementById('progress-section')!.style.display = 'block';
   addLogEntry('开始批量下载，共 ' + pending.length + ' 个文件', 'info');
 }
