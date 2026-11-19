@@ -799,3 +799,38 @@ background
 16. **浮动面板内嵌日志比引导用户开 DevTools 友好**: 用户是中文界面,内嵌日志 + 一键复制大幅降低沟通成本
 17. **检测 404 主页面**: 用户在错误页面触发操作时,扩展应该显示提示而不是强行执行
 18. **fallback 路径会放大问题**: 资源被删时,fallback 跳到无效 URL 会让用户看到 404 页面,体验比直接失败更差
+
+---
+
+## 2026-11-19 开发记录 (v1.1.2 维护更新)
+
+### 29. Popup 资源列表重复追加
+
+- **日期**: 2026-11-19
+- **位置**: `src/popup/popup.ts:updatePPTList()`
+- **症状**: 同一页面多次点击"扫描"，资源列表条目成倍重复
+- **根因**: `updatePPTList()` 直接 `appendChild`，从不清空旧列表
+- **修复**: 渲染前 `pptListEl.innerHTML = ''`
+
+### 30. 批量下载状态按索引回写导致错位
+
+- **日期**: 2026-11-19
+- **位置**: `src/content/index.ts:batchDownloadV10()`
+- **症状**: 批量下载中若有资源 404 被跳过，`files` 数组比 `ppts` 短，结果按 `idx` 回写 `ppt.downloaded` 会标记到错误的文件
+- **修复**: 构建 `filePptMap: Map<string, PPTResource[]>`（文件名 → 资源队列），结果按 `r.filename` 精确出队回写；同名文件按顺序消费
+
+### 31. 版本号对齐 + LICENSE + README 重写
+
+- **日期**: 2026-11-19
+- **问题**: v1.1.1 修复提交未同步版本号（manifest 1.1.0 / package.json 1.0.0）；README 声明 MIT 但 LICENSE 文件缺失；README 链接 `底层逻辑.md`、`.workbuddy/` 等被 gitignore 的文件（GitHub 死链）；CHANGELOG 缺 1.1.0/1.1.1 记录
+- **修复**:
+  - manifest.json / package.json / package-lock.json / popup 页脚统一 → **1.1.2**
+  - 新增 MIT `LICENSE`（Copyright 2026 Erichestein0702）
+  - README 重写：v1.1.x 同源代理 tab 架构、多类型/设置/日志面板功能、完整权限表 + 隐私声明、移除死链
+  - CHANGELOG 补录 1.1.0 / 1.1.1 / 1.1.2
+
+### 关键经验教训（v1.1.2 新增）
+
+19. **发版必须同步版本号**: 修复提交合入时 manifest/package.json/页脚三处版本号要一起改，否则用户无法分辨扩展是否更新
+20. **README 只链接入库文件**: gitignore 的文档（工作记忆/底层逻辑）不要出现在 README 链接里，公开仓库上全是死链
+21. **并行数组回写是隐患**: "请求列表"与"结果列表"长度可能不等（跳过/失败），回写状态必须按键（文件名/ID）映射，不能按索引

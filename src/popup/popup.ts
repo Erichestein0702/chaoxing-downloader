@@ -152,6 +152,7 @@ function updatePPTList(ppts: PPTResource[]): void {
   if (!pptListEl || !pptCountEl) return;
 
   pptCountEl.textContent = ppts.length + ' 个';
+  pptListEl.innerHTML = '';
 
   if (ppts.length > 0) {
     downloadAllBtn.disabled = false;

@@ -439,6 +439,8 @@ async function batchDownloadV10(ppts: PPTResource[]): Promise<void> {
   updateBatchProgress(0, total, '获取链接中...');
   const files: Array<{ cdnUrl: string; filename: string }> = [];
   const failedNames: string[] = [];
+  // 文件名 → 资源队列：按文件名回写下载状态，避免 404 跳过导致索引错位
+  const filePptMap = new Map<string, PPTResource[]>();
 
   for (let i = 0; i < ppts.length; i++) {
     const ppt = ppts[i];
@@ -454,7 +456,11 @@ async function batchDownloadV10(ppts: PPTResource[]): Promise<void> {
           const result = await fetchStatusWithRetry(meta, 2);
           if (result) {
             const ext = result.isPdf ? 'pdf' : ppt.type;
-            files.push({ cdnUrl: result.url, filename: ppt.title + '.' + ext });
+            const filename = ppt.title + '.' + ext;
+            files.push({ cdnUrl: result.url, filename });
+            const queue = filePptMap.get(filename) || [];
+            queue.push(ppt);
+            filePptMap.set(filename, queue);
             gotUrl = true;
             log('[V10-BATCH] ✅ ' + ppt.title + ': 直链就绪');
             break;
@@ -503,13 +509,13 @@ async function batchDownloadV10(ppts: PPTResource[]): Promise<void> {
     let okCount = 0;
     let failCount = 0;
 
-    batchResult.results.forEach((r, idx) => {
-      if (idx < ppts.length) {
-        const ppt = ppts[idx];
+    batchResult.results.forEach((r) => {
+      const ppt = filePptMap.get(r.filename)?.shift();
+      if (ppt) {
         ppt.downloaded = r.success;
         updateSingleItemStatus(ppt, r.success);
-        if (r.success) okCount++; else failCount++;
       }
+      if (r.success) okCount++; else failCount++;
     });
 
     const summary = '✅ 完成: ' + okCount + '成功 ' + failCount + '失败';

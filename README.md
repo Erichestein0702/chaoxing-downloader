@@ -1,8 +1,8 @@
-# 📥 ChaoXing PPT Downloader
+# 📥 超星学习通资源下载器
 
-> 超星学习通 PPT/PPTX 资源一键下载器 — Chrome 扩展
+> 自动检测并下载超星学习通课程资源（PPT/PDF/视频/文档等）— Chrome 扩展 (Manifest V3)
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.2-blue.svg)](./CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Manifest V3](https://img.shields.io/badge/Chrome-Manifest%20V3-orange.svg)](https://developer.chrome.com/docs/extensions/mv3/intro/)
 
@@ -10,162 +10,100 @@
 
 ## ✨ 功能特性
 
-- 🔍 **自动检测** — 自动扫描超星学习通"资料区"中的所有 PPT/PPTX 文件
-- 📥 **原生下载** — 弹出 Chrome 原生"另存为"对话框，自由选择保存位置
-- 📦 **批量下载**（实验性）— 一键下载所有文件到指定子文件夹
-- 🛡️ **智能降级** — 主路径失败时自动切换备用方案，确保可用性
-- 🎯 **零配置** — 安装即用，无需 API Key 或额外设置
-
-## 📸 使用效果
-
-1. 打开超星学习通课程资料页面
-2. 页面右上角出现下载器面板
-3. 点击「扫描PPT」→ 显示检测到的文件列表
-4. 点击「下载」→ Chrome 弹出保存对话框 → 选择位置 → 完成！
-
-```
-┌─────────────────────────────┐
-│  📥 PPT下载器           ✕   │
-├─────────────────────────────┤
-│  已发现 5 个                 │
-│                             │
-│  ┌───────────────────────┐  │
-│  │ 批量下载 (5)          │  │
-│  └───────────────────────┘  │
-│                             │
-│  检测到 5 个PPT              │
-│  ┌─────────────────────┐    │
-│  │ [PPTX] 1. 课程导学... [已下载] │    │ ← 单个：弹对话框
-│  │ [PPTX] 2. 第一章...  [下载]   │
-│  │ [PPTX] 3. 第二章...  [下载]   │
-│  │ [PPTX] 4. 第四章...  [下载]   │
-│  │ [PPTX] 5. 第三章...  [下载]   │
-│  └─────────────────────┘    │
-└─────────────────────────────┘
-```
+- 🔍 **自动检测** — 扫描课程"资料区"，解析 `toOpen()` 参数提取资源元数据
+- 📦 **多类型支持** — PPT / PPTX / PDF / DOC / DOCX / XLS / XLSX / MP4 / MP3 / ZIP / RAR
+- 📥 **原生下载** — 单个文件弹出 Chrome"另存为"对话框；批量静默下载到 `Downloads/课程名/` 子文件夹
+- 🔁 **失败重试** — 直链获取失败自动重试（指数退避，最多 2 次），批量下载实时进度显示
+- 🛡️ **智能降级** — 主路径失败自动切换备用方案；资源被删（404）时优雅跳过，不再弹错误窗口
+- 📋 **内嵌日志面板** — 浮动面板一键查看/复制/导出运行日志，无需打开 DevTools
+- ⚙️ **设置面板** — 自动扫描开关、下载方式、文件类型过滤（`chrome.storage.local` 持久化）
+- 🎯 **零配置** — 安装即用，无需 API Key
 
 ## 🚀 快速开始
 
-### 安装
+### 构建安装
 
 ```bash
-# 克隆项目
-git clone <repository-url>
-cd chaoxing
-
-# 安装依赖
+git clone https://github.com/Erichestein0702/chaoxing-downloader.git
+cd chaoxing-downloader
 npm install
-
-# 构建
 npm run build
 ```
 
-### 加载到 Chrome
-
 1. 打开 `chrome://extensions/`
-2. 开启右上角 **🔧 开发者模式**
-3. 点击 **加载已解压的扩展程序**
-4. 选择项目的 `dist` 目录
-5. ✅ 扩展图标出现在工具栏
+2. 开启右上角 **开发者模式**
+3. 点击 **加载已解压的扩展程序**，选择项目的 `dist` 目录
 
 ### 使用
 
-1. 登录 [超星学习通](https://i.chaoxing.com) 网页版
-2. 进入任意课程的章节/资料页面
-3. 页面右上角自动出现 **📥 PPT下载器** 面板
-4. 点击 **扫描PPT**
-5. 单个文件点击对应「下载」按钮，或点击「批量下载」一键全部
+1. 登录 [超星学习通](https://i.chaoxing.com) 网页版，进入课程章节/资料页面
+2. 页面右上角出现 **📥 资源下载器** 浮动面板（或点击工具栏扩展图标）
+3. 点击 **扫描资源** → 显示文件列表
+4. 单个点击「下载」弹出保存对话框；**批量下载** 一键全部存入课程子文件夹
+5. 出问题点面板 **📋** 按钮查看/复制日志
 
-## 🏗️ 技术架构
+## 🏗️ 技术架构（v1.1.x）
 
 ```
-┌──────────────────┐     sendMessage      ┌──────────────────┐
-│  Content Script  │ ──────────────────→  │ Background SW    │
-│  (学习通页面注入) │                       │ (Service Worker) │
-│                  │ ←──────────────────  │                  │
-│  ① DOM扫描       │    下载结果          │  ② fetch CDN     │
-│  ② 同域fetch API │                      │  ③ Data URL编码   │
-│  ③ 解析CDN直链   │                      │  ④ 触发下载      │
-└──────────────────┘                      └──────────────────┘
-       │                                         │
-       ▼                                         ▼
-┌──────────────────┐                     ┌──────────────────┐
-│ mooc1.chaoxing.com│                    │ s3.cldisk.com    │
-│ /ananas/status/  │  → JSON含CDN地址    │ 返回 PDF Blob    │
-└──────────────────┘                     └──────────────────┘
-                                                  │
-                                          chrome.downloads.download()
-                                          saveAs: true → "另存为"对话框
+Content Script (mooc2-ans 课程页)
+  ├── 扫描 li.dataBody_file → 解析 meta (objectId/classId/enc/t)
+  └── sendMessage(RESOLVE_CDN_URL)
+        ↓
+Background Service Worker
+  ├── fetchViaMooc1Tab(): 找/建 mooc1 后台 tab
+  │     └── 该 tab 的 content 同源 fetch status API → CDN 直链
+  │         (绕过 MV3 SW 强制 Origin: chrome-extension:// 导致的 403)
+  ├── fetch(CDN) → Blob → base64 Data URL (SW 无 createObjectURL)
+  └── chrome.downloads.download({saveAs: true|false})
 ```
-
-### 核心技术点
 
 | 技术 | 用途 |
 |------|------|
-| Manifest V3 | Chrome 最新扩展规范 |
-| TypeScript | 类型安全 |
-| Vite | 现代化构建 |
-| Content Script 注入 | 页面 DOM 操作 |
-| Service Worker | 后台跨域请求 + 下载管理 |
+| Manifest V3 + TypeScript + Vite | 扩展规范 / 类型安全 / 构建 |
+| 同源代理 tab | 绕过 background fetch 的 Origin 限制（v1.1.1 核心修复） |
 | Data URL 编码 | 解决 SW 无 DOM API 的限制 |
+| host_permissions `*.cldisk.com` | Background 跨域 fetch CDN |
 
-详细技术文档请查看 [底层逻辑.md](./底层逻辑.md)
+> 架构演进的完整踩坑记录见 [DEVELOPMENT_MEMORY.md](./DEVELOPMENT_MEMORY.md)。
 
 ## 📁 项目结构
 
 ```
 src/
-├── background/index.ts    # 后台服务：下载核心逻辑
-├── content/index.ts       # 内容脚本：页面注入、DOM扫描、UI
-├── content/styles.css      # 浮动面板样式
-├── popup/                 # 扩展图标弹窗
-├── types/index.ts         # TypeScript 类型定义
-└── manifest.json          # MV3 扩展清单
+├── background/index.ts    # Service Worker：直链解析、下载核心
+├── content/index.ts       # 页面注入：DOM 扫描、浮动面板、下载触发
+├── content/styles.css     # 浮动面板样式
+├── popup/                 # 工具栏弹窗（主页 + 设置双标签）
+├── types/index.ts         # 类型定义与文件类型推断
+└── manifest.json          # MV3 清单
 ```
 
 ## ⚙️ 权限说明
 
-本扩展需要的权限：
-
 | 权限 | 用途 |
 |------|------|
 | `downloads` | 触发 Chrome 原生下载 |
-| `activeTab` | 访问当前标签页内容 |
-| `https://mooc1.chaoxing.com/*` | 学习通主站（Content Script 注入） |
-| `https://*.cldisk.com/*` | CDN 文件服务器（Background 跨域下载） |
+| `activeTab` / `scripting` | 访问当前标签页 |
+| `cookies` | 读取超星/CDN 域 Cookie 附加到下载请求（仅发往对应域名） |
+| `storage` | 保存设置项 |
+| `https://*.chaoxing.com/*` | 页面注入与 status API |
+| `https://*.cldisk.com/*` | CDN 文件下载 |
+
+**隐私**：所有网络请求仅指向超星及其 CDN 域名，无任何第三方上报；日志仅存内存，导出需手动操作。
 
 ## 🐛 已知限制
 
-1. **批量下载实验性** — 批量静默下载功能存在 CORS 兼容问题待修复，建议使用单个下载
-2. **仅支持资料区** — 当前版本主要针对课程"资料区"的 PPT 资源，其他区域未全面测试
-3. **依赖 status API** — 如果超星变更 `/ananas/status/{objectId}` 接口格式需要同步更新
-4. **大文件** — 超大文件（>100MB）的 Data URL 编码可能占用较多内存
+1. **后台 tab** — 直链解析需要复用/新建一个 `mooc1.chaoxing.com` 后台标签页（不抢焦点），这是绕过 Origin 限制的代价
+2. **大文件内存** — Data URL 编码在超大文件（>100MB）时内存占用较高
+3. **依赖 status API** — 超星若变更 `/ananas/status/{objectId}` 接口需同步更新
+4. **仅覆盖资料区** — 其他页面区域未全面测试
 
-## 📚 项目文档
+## 📚 文档
 
-| 文档 | 说明 | 面向读者 |
-|------|------|----------|
-| [底层逻辑.md](./底层逻辑.md) | 完整技术文档：工作流程、历史演进、知识点汇总 | 开发者 |
-| [DEVELOPMENT_MEMORY.md](./DEVELOPMENT_MEMORY.md) | 开发错误与修复记录、架构演进、经验教训 | Bug 修复者 |
-| [CHANGELOG.md](./CHANGELOG.md) | 版本变更日志与迭代历史 | 所有参与者 |
-| [.workbuddy/memory/2026-04-04.md](./.workbuddy/memory/2026-04-04.md) | 每日工作日志（开发过程详细记录） | 开发者 |
-| [.workbuddy/memory/MEMORY.md](./.workbuddy/memory/MEMORY.md) | 项目长期记忆：版本体系、关键决策 | 项目维护者 |
-
-### 文档维护规范
-
-- **代码变更时必须同步更新相关文档**
-- **错误修复后更新 DEVELOPMENT_MEMORY.md**
-- **重大版本变更时更新 MEMORY.md 和 CHANGELOG.md**
-- **每日开发工作记录到日期日志文件**
-
----
-
-## 📊 版本历史
-
-查看 [CHANGELOG.md](./CHANGELOG.md) 了解完整的版本迭代记录。
-
-从 v0.3 到 v1.0 经历了 9 个主要版本的迭代，核心突破在于：
-> **利用 Background Service Worker 的 host_permissions 绕过 CORS + Data URL 方案解决 SW 无 DOM API 限制**
+| 文档 | 说明 |
+|------|------|
+| [DEVELOPMENT_MEMORY.md](./DEVELOPMENT_MEMORY.md) | 错误记录、架构演进、经验教训 |
+| [CHANGELOG.md](./CHANGELOG.md) | 版本变更日志 |
 
 ## 🤝 参考与致谢
 
@@ -174,7 +112,7 @@ src/
 
 ## 📄 许可证
 
-MIT License
+[MIT License](LICENSE)
 
 ---
 
